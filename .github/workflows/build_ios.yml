@@ -21,7 +21,9 @@ jobs:
 
       - name: Install Dependencies
         working-directory: mobile
-        run: flutter pub get
+        run: |
+          flutter precache --ios
+          flutter pub get
 
       - name: Build iOS IPA without codesign
         working-directory: mobile
