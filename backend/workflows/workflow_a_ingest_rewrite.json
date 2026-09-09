@@ -1,0 +1,263 @@
+{
+  "name": "Workflow A - Ingest, Deduplicate, Rewrite & Store (Dynamic)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 15
+            }
+          ]
+        }
+      },
+      "id": "node-cron-trigger",
+      "name": "Schedule Every 15 Min",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.1,
+      "position": [160, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id as source_id, name as source_name, url as feed_url FROM news_sources WHERE is_active = true;"
+      },
+      "id": "node-fetch-sources",
+      "name": "Get Active Sources from DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [380, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-cred-id",
+          "name": "Postgres News DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.feed_url }}"
+      },
+      "id": "node-rss-read",
+      "name": "Fetch Dynamic RSS Feed",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.1,
+      "position": [600, 300],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const results = [];\nfor (const item of $input.all()) {\n  const raw = item.json;\n  if (!raw.title) continue;\n\n  let imageUrl = null;\n  if (raw.enclosure && raw.enclosure.url) {\n    imageUrl = raw.enclosure.url;\n  } else if (raw['media:content'] && raw['media:content'].$ && raw['media:content'].$.url) {\n    imageUrl = raw['media:content'].$.url;\n  } else if (raw['media:thumbnail'] && raw['media:thumbnail'].$ && raw['media:thumbnail'].$.url) {\n    imageUrl = raw['media:thumbnail'].$.url;\n  }\n\n  const rawContent = (raw.contentSnippet || raw.content || raw.summary || raw.description || '').replace(/<[^>]*>?/gm, '');\n  \n  results.push({\n    json: {\n      source_type: 'rss',\n      source_url: raw.link || raw.guid || '',\n      original_title: raw.title || '',\n      original_content: rawContent,\n      image_url: imageUrl\n    }\n  });\n}\nreturn results;"
+      },
+      "id": "node-clean-rss",
+      "name": "Extract & Normalize Feed",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [820, 300]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT source_url FROM news_drafts WHERE source_url = $1 LIMIT 1;",
+        "additionalFields": {
+          "queryParams": "={{ $json.source_url }}"
+        }
+      },
+      "id": "node-check-duplicate",
+      "name": "Check Duplicate in Postgres",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1040, 300],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-cred-id",
+          "name": "Postgres News DB"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-is-not-duplicate",
+              "leftValue": "={{ $json.source_url }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "empty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "node-filter-duplicates",
+      "name": "Filter Existing Articles",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1260, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"gpt-4o-mini\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"Sen profesyonel bir haber editörüsün. Sana verilen haber metnini tarafsız, dikkat çekici, Türkçe ve akıcı 2 paragraflık bir özet haline getir. Tıklama oranı yüksek (yüksek CTR) ilgi çekici bir başlık üret. SADECE geçerli JSON formatında şu yapıda cevap ver: {\\\"title\\\": \\\"...\\\", \\\"content\\\": \\\"...\\\"}\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"Başlık: {{ $('Extract & Normalize Feed').item.json.original_title }}\\n\\nİçerik: {{ $('Extract & Normalize Feed').item.json.original_content }}\"\n    }\n  ],\n  \"temperature\": 0.4,\n  \"response_format\": { \"type\": \"json_object\" }\n}"
+      },
+      "id": "node-llm-rewrite",
+      "name": "LLM News Rewriter",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1480, 200],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "openai-header-cred",
+          "name": "OpenAI Auth Header"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const original = $('Extract & Normalize Feed').item.json;\nconst aiRaw = $input.first().json.choices[0].message.content;\n\nlet parsedAi = {};\ntry {\n  parsedAi = JSON.parse(aiRaw.trim());\n} catch (e) {\n  const jsonMatch = aiRaw.match(/\\{[\\s\\S]*\\}/);\n  if (jsonMatch) {\n    parsedAi = JSON.parse(jsonMatch[0]);\n  } else {\n    parsedAi = {\n      title: original.original_title,\n      content: original.original_content\n    };\n  }\n}\n\nreturn [{\n  json: {\n    source_type: original.source_type,\n    source_url: original.source_url,\n    original_title: original.original_title,\n    original_content: original.original_content,\n    ai_title: parsedAi.title || original.original_title,\n    ai_content: parsedAi.content || original.original_content,\n    image_url: original.image_url,\n    status: 'PENDING',\n    target_platforms: JSON.stringify(['telegram', 'wordpress'])\n  }\n}];"
+      },
+      "id": "node-parse-ai",
+      "name": "Parse AI Output & Merge",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1700, 200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO news_drafts (source_type, source_url, original_title, original_content, ai_title, ai_content, image_url, status, target_platforms) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb) RETURNING id, ai_title;",
+        "additionalFields": {
+          "queryParams": "={{ $json.source_type }}, {{ $json.source_url }}, {{ $json.original_title }}, {{ $json.original_content }}, {{ $json.ai_title }}, {{ $json.ai_content }}, {{ $json.image_url }}, {{ $json.status }}, {{ $json.target_platforms }}"
+        }
+      },
+      "id": "node-insert-postgres",
+      "name": "Store Draft as PENDING",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1920, 200],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-cred-id",
+          "name": "Postgres News DB"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Schedule Every 15 Min": {
+      "main": [
+        [
+          {
+            "node": "Get Active Sources from DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Active Sources from DB": {
+      "main": [
+        [
+          {
+            "node": "Fetch Dynamic RSS Feed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch Dynamic RSS Feed": {
+      "main": [
+        [
+          {
+            "node": "Extract & Normalize Feed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract & Normalize Feed": {
+      "main": [
+        [
+          {
+            "node": "Check Duplicate in Postgres",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Duplicate in Postgres": {
+      "main": [
+        [
+          {
+            "node": "Filter Existing Articles",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Filter Existing Articles": {
+      "main": [
+        [
+          {
+            "node": "LLM News Rewriter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "LLM News Rewriter": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Output & Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Output & Merge": {
+      "main": [
+        [
+          {
+            "node": "Store Draft as PENDING",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}

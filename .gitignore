@@ -1,0 +1,26 @@
+# Root gitignore
+.idea/
+.vscode/
+*.db
+*.log
+.DS_Store
+
+# Mobile / Flutter
+mobile/build/
+mobile/.dart_tool/
+mobile/.flutter-plugins
+mobile/.flutter-plugins-dependencies
+mobile/.packages
+mobile/.pub-cache/
+mobile/.pub/
+mobile/android/.gradle/
+mobile/android/local.properties
+mobile/ios/.symlinks/
+mobile/ios/Pods/
+mobile/ios/Podfile.lock
+
+# Backend (if any)
+backend/venv/
+backend/__pycache__/
+backend/*.pyc
+backend/.env

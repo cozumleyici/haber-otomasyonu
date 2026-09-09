@@ -1,0 +1,431 @@
+{
+  "name": "Workflow B - Mobile Decision & Multi-Platform Publisher (Dynamic)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "news-action",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "node-webhook-action",
+      "name": "Webhook /news-action",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [160, 350],
+      "webhookId": "news-action-webhook-id"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-action-reject",
+              "leftValue": "={{ $json.body.action }}",
+              "rightValue": "reject",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "node-check-action",
+      "name": "Is Action Reject?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [400, 350]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE news_drafts SET status = 'REJECTED', updated_at = NOW() WHERE id = $1;",
+        "additionalFields": {
+          "queryParams": "={{ $('Webhook /news-action').item.json.body.draft_id }}"
+        }
+      },
+      "id": "node-db-reject",
+      "name": "Update DB to REJECTED",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [640, 200],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-cred-id",
+          "name": "Postgres News DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": true,\n  \"message\": \"Taslak reddedildi.\",\n  \"draft_id\": \"{{ $('Webhook /news-action').item.json.body.draft_id }}\"\n}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "node-respond-reject",
+      "name": "Respond Reject",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [880, 200]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT key, value FROM system_settings WHERE category IN ('telegram', 'wordpress');"
+      },
+      "id": "node-get-dynamic-settings",
+      "name": "Get Settings from DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [640, 500],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-cred-id",
+          "name": "Postgres News DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const settingsRows = $input.all();\nconst config = {};\nsettingsRows.forEach(r => {\n  config[r.json.key] = r.json.value;\n});\n\nconst body = $('Webhook /news-action').item.json.body;\n\nreturn [{\n  json: {\n    body: body,\n    config: config\n  }\n}];"
+      },
+      "id": "node-merge-settings",
+      "name": "Merge Settings & Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [860, 500]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE news_drafts SET status = 'APPROVED', ai_title = $2, ai_content = $3, target_platforms = $4::jsonb, updated_at = NOW() WHERE id = $1;",
+        "additionalFields": {
+          "queryParams": "={{ $json.body.draft_id }}, {{ $json.body.final_title }}, {{ $json.body.final_content }}, {{ JSON.stringify($json.body.target_platforms || ['telegram', 'wordpress']) }}"
+        }
+      },
+      "id": "node-db-approve",
+      "name": "Update DB to APPROVED",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1080, 500],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-cred-id",
+          "name": "Postgres News DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-target-telegram",
+              "leftValue": "={{ JSON.stringify($('Merge Settings & Payload').item.json.body.target_platforms) }}",
+              "rightValue": "telegram",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "id": "cond-telegram-token-exists",
+              "leftValue": "={{ $('Merge Settings & Payload').item.json.config.telegram_bot_token }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "node-check-telegram",
+      "name": "Publish to Telegram?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1300, 420]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://api.telegram.org/bot{{ $('Merge Settings & Payload').item.json.config.telegram_bot_token }}/{{ $('Merge Settings & Payload').item.json.body.image_url ? 'sendPhoto' : 'sendMessage' }}",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"chat_id\": \"{{ $('Merge Settings & Payload').item.json.config.telegram_chat_id }}\",\n  {{ $('Merge Settings & Payload').item.json.body.image_url ? '\"photo\": \"' + $('Merge Settings & Payload').item.json.body.image_url + '\", \"caption\": \"*' + $('Merge Settings & Payload').item.json.body.final_title.replace(/\"/g, '\\\\\"') + '*\\\\n\\\\n' + $('Merge Settings & Payload').item.json.body.final_content.replace(/\"/g, '\\\\\"') + '\", \"parse_mode\": \"Markdown\"' : '\"text\": \"*' + $('Merge Settings & Payload').item.json.body.final_title.replace(/\"/g, '\\\\\"') + '*\\\\n\\\\n' + $('Merge Settings & Payload').item.json.body.final_content.replace(/\"/g, '\\\\\"') + '\", \"parse_mode\": \"Markdown\"' }}\n}"
+      },
+      "id": "node-dispatch-telegram",
+      "name": "Telegram Bot Dispatch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1540, 400],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "cond-target-wp",
+              "leftValue": "={{ JSON.stringify($('Merge Settings & Payload').item.json.body.target_platforms) }}",
+              "rightValue": "wordpress",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            },
+            {
+              "id": "cond-wp-url-exists",
+              "leftValue": "={{ $('Merge Settings & Payload').item.json.config.wordpress_base_url }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "node-check-wordpress",
+      "name": "Publish to WordPress?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1300, 600]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Merge Settings & Payload').item.json.config.wordpress_base_url.replace(/\\/$/, '') }}/wp-json/wp/v2/posts",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "={{ 'Basic ' + Buffer.from($('Merge Settings & Payload').item.json.config.wordpress_username + ':' + $('Merge Settings & Payload').item.json.config.wordpress_app_password.replace(/\\s/g, '')).toString('base64') }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"title\": \"{{ $('Merge Settings & Payload').item.json.body.final_title }}\",\n  \"content\": \"<p>{{ $('Merge Settings & Payload').item.json.body.final_content.replace(/\\n\\n/g, '</p><p>').replace(/\\n/g, '<br/>') }}</p>\",\n  \"status\": \"publish\"\n}"
+      },
+      "id": "node-dispatch-wordpress",
+      "name": "WordPress REST API Dispatch",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1540, 600],
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE news_drafts SET status = 'PUBLISHED', updated_at = NOW() WHERE id = $1;",
+        "additionalFields": {
+          "queryParams": "={{ $('Webhook /news-action').item.json.body.draft_id }}"
+        }
+      },
+      "id": "node-db-published",
+      "name": "Update DB to PUBLISHED",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.4,
+      "position": [1780, 500],
+      "credentials": {
+        "postgres": {
+          "id": "postgres-cred-id",
+          "name": "Postgres News DB"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\n  \"success\": true,\n  \"message\": \"Başarıyla yayınlandı!\",\n  \"draft_id\": \"{{ $('Webhook /news-action').item.json.body.draft_id }}\",\n  \"status\": \"PUBLISHED\"\n}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "node-respond-success",
+      "name": "Respond Success",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [2000, 500]
+    }
+  ],
+  "connections": {
+    "Webhook /news-action": {
+      "main": [
+        [
+          {
+            "node": "Is Action Reject?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is Action Reject?": {
+      "main": [
+        [
+          {
+            "node": "Update DB to REJECTED",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Get Settings from DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update DB to REJECTED": {
+      "main": [
+        [
+          {
+            "node": "Respond Reject",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Settings from DB": {
+      "main": [
+        [
+          {
+            "node": "Merge Settings & Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Settings & Payload": {
+      "main": [
+        [
+          {
+            "node": "Update DB to APPROVED",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update DB to APPROVED": {
+      "main": [
+        [
+          {
+            "node": "Publish to Telegram?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Publish to WordPress?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish to Telegram?": {
+      "main": [
+        [
+          {
+            "node": "Telegram Bot Dispatch",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update DB to PUBLISHED",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telegram Bot Dispatch": {
+      "main": [
+        [
+          {
+            "node": "Update DB to PUBLISHED",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Publish to WordPress?": {
+      "main": [
+        [
+          {
+            "node": "WordPress REST API Dispatch",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Update DB to PUBLISHED",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WordPress REST API Dispatch": {
+      "main": [
+        [
+          {
+            "node": "Update DB to PUBLISHED",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update DB to PUBLISHED": {
+      "main": [
+        [
+          {
+            "node": "Respond Success",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
