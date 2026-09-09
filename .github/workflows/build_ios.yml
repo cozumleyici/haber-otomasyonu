@@ -23,17 +23,19 @@ jobs:
         working-directory: mobile
         run: flutter pub get
 
-      - name: Build iOS without codesign
+      - name: Build iOS IPA without codesign
         working-directory: mobile
         run: |
-          flutter build ios --release --no-codesign
-          cd build/ios/iphoneos
+          flutter build ipa --no-codesign
+          APP_PATH=$(find build/ios -name "Runner.app" -type d | head -n 1)
+          echo "Found Runner.app at: $APP_PATH"
           mkdir -p Payload
-          cp -r Runner.app Payload/
+          cp -r "$APP_PATH" Payload/
           zip -r app-release.ipa Payload
+          ls -lh app-release.ipa
 
       - name: Upload IPA Artifact
         uses: actions/upload-artifact@v4
         with:
           name: ios-release-ipa
-          path: mobile/build/ios/iphoneos/app-release.ipa
+          path: mobile/app-release.ipa
