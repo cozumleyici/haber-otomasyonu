@@ -82,7 +82,7 @@ class PublisherService {
         final cleanImageUrl = imageUrl.trim();
 
         // Telegram sendPhoto caption sınırı en fazla 1024 karakterdir
-        if (fullHtmlText.length <= 1024) {
+        if (fullHtmlText.length <= 1000) {
           final photoSuccess = await _trySendPhoto(
             botToken: botToken,
             chatId: chatId,
@@ -93,13 +93,25 @@ class PublisherService {
             return PublishResult(success: true, message: 'Haber Telegram kanalınıza başarıyla yayınlandı!');
           }
         } else {
-          // Metin 1024 karakterden uzun ise: Fotoğrafı başlık + ilk kısım ile gönder, kalanını tamamla
-          final maxCaptionLength = 1000 - safeTitle.length - 15;
-          final splitIndex = _findSplitPoint(safeContent, maxCaptionLength > 100 ? maxCaptionLength : 500);
-          final firstPart = safeContent.substring(0, splitIndex).trim();
-          final remainingPart = safeContent.substring(splitIndex).trim();
+          // Metin 1000 karakterden uzun ise: Fotoğrafı başlık + ilk kısım ile gönder, kalanını mesaj olarak gönder
+          final titlePrefix = '<b>$safeTitle</b>\n\n';
+          final availableForContent = 980 - titlePrefix.length;
 
-          final photoCaption = '<b>$safeTitle</b>\n\n$firstPart';
+          String photoCaption;
+          String remainingPart;
+
+          if (availableForContent > 80) {
+            final splitIndex = _findSplitPoint(safeContent, availableForContent);
+            final firstPart = safeContent.substring(0, splitIndex).trim();
+            photoCaption = '$titlePrefix$firstPart';
+            remainingPart = safeContent.substring(splitIndex).trim();
+          } else {
+            photoCaption = titlePrefix.length <= 1000
+                ? titlePrefix.trim()
+                : '<b>${_escapeHtml(finalTitle.trim().substring(0, 950))}...</b>';
+            remainingPart = safeContent;
+          }
+
           final photoSuccess = await _trySendPhoto(
             botToken: botToken,
             chatId: chatId,
@@ -144,6 +156,47 @@ class PublisherService {
     required String caption,
   }) async {
     final url = 'https://api.telegram.org/bot$botToken/sendPhoto';
+
+    // 1. Önce görseli cihazda indirip Multipart FormData olarak Telegram'a yüklemeyi dene
+    // (Böylece web sitesinin Telegram sunucularını engellemesi problemi aşılır)
+    try {
+      final imgResponse = await _dio.get<List<int>>(
+        photoUrl,
+        options: Options(
+          responseType: ResponseType.bytes,
+          sendTimeout: const Duration(seconds: 15),
+          receiveTimeout: const Duration(seconds: 15),
+          headers: {
+            'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+            'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+          },
+        ),
+      );
+
+      if (imgResponse.statusCode == 200 &&
+          imgResponse.data != null &&
+          imgResponse.data!.isNotEmpty) {
+        final formData = FormData.fromMap({
+          'chat_id': chatId,
+          'caption': caption,
+          'parse_mode': 'HTML',
+          'photo': MultipartFile.fromBytes(
+            imgResponse.data!,
+            filename: 'news_image.jpg',
+          ),
+        });
+
+        final res = await _dio.post(url, data: formData);
+        if (res.statusCode == 200 && res.data['ok'] == true) {
+          return true;
+        }
+      }
+    } catch (e) {
+      print('[PublisherService] Multipart sendPhoto failed: $e');
+    }
+
+    // 2. Eğer cihazdan indirme başarısız olursa doğrudan URL olarak Telegram'a ilet
     try {
       final res = await _dio.post(url, data: {
         'chat_id': chatId,
@@ -154,7 +207,7 @@ class PublisherService {
       return res.statusCode == 200 && res.data['ok'] == true;
     } on DioException catch (e) {
       final desc = e.response?.data is Map ? e.response?.data['description']?.toString() : null;
-      print('[PublisherService] sendPhoto failed: $desc');
+      print('[PublisherService] direct sendPhoto failed: $desc');
 
       // Parse hatası verdiyse HTML etiketlerini temizleyip düz metin olarak tekrar dene
       if (desc != null && (desc.contains("can't parse") || desc.contains("entity"))) {
@@ -173,16 +226,41 @@ class PublisherService {
           (desc.contains('chat not found') ||
               desc.contains('Unauthorized') ||
               desc.contains('not a member') ||
-              desc.contains('administrator'))) {
+              desc.contains('administrator') ||
+              desc.contains("can't send messages to the bot"))) {
         rethrow;
       }
 
-      // Fotoğraf URL'si kaynaklı bir hataysa sendMessage fallback'ine geç
+      return false;
+    } catch (_) {
       return false;
     }
   }
 
+  /// Telegram sendMessage sınırını (4096 karakter) aşmamak için otomatik parçalar halinde gönderir
   Future<bool> _trySendMessage({
+    required String botToken,
+    required String chatId,
+    required String text,
+  }) async {
+    final chunks = _splitTextIntoChunks(text, maxChunkSize: 3900);
+
+    for (int i = 0; i < chunks.length; i++) {
+      final chunk = chunks[i];
+      final success = await _sendSingleMessageChunk(
+        botToken: botToken,
+        chatId: chatId,
+        text: chunk,
+      );
+      if (!success) return false;
+      if (i < chunks.length - 1) {
+        await Future.delayed(const Duration(milliseconds: 350));
+      }
+    }
+    return true;
+  }
+
+  Future<bool> _sendSingleMessageChunk({
     required String botToken,
     required String chatId,
     required String text,
@@ -197,7 +275,7 @@ class PublisherService {
       return res.statusCode == 200 && res.data['ok'] == true;
     } on DioException catch (e) {
       final desc = e.response?.data is Map ? e.response?.data['description']?.toString() : null;
-      print('[PublisherService] sendMessage failed: $desc');
+      print('[PublisherService] sendMessage chunk failed: $desc');
 
       // Parse hatası verdiyse düz metin dene
       if (desc != null && (desc.contains("can't parse") || desc.contains("entity"))) {
@@ -214,11 +292,34 @@ class PublisherService {
     }
   }
 
+  List<String> _splitTextIntoChunks(String text, {int maxChunkSize = 3900}) {
+    if (text.length <= maxChunkSize) return [text];
+
+    final chunks = <String>[];
+    var remaining = text;
+
+    while (remaining.isNotEmpty) {
+      if (remaining.length <= maxChunkSize) {
+        chunks.add(remaining);
+        break;
+      }
+
+      final splitIndex = _findSplitPoint(remaining, maxChunkSize);
+      final actualCut = (splitIndex <= 0 || splitIndex > maxChunkSize) ? maxChunkSize : splitIndex;
+      chunks.add(remaining.substring(0, actualCut).trim());
+      remaining = remaining.substring(actualCut).trim();
+    }
+
+    return chunks;
+  }
+
   int _findSplitPoint(String text, int maxLength) {
     if (text.length <= maxLength) return text.length;
     final searchRange = text.substring(0, maxLength);
-    final lastNewline = searchRange.lastIndexOf('\n\n');
-    if (lastNewline > maxLength ~/ 2) return lastNewline;
+    final lastDoubleNewline = searchRange.lastIndexOf('\n\n');
+    if (lastDoubleNewline > maxLength ~/ 2) return lastDoubleNewline;
+    final lastSingleNewline = searchRange.lastIndexOf('\n');
+    if (lastSingleNewline > maxLength ~/ 2) return lastSingleNewline;
     final lastDot = searchRange.lastIndexOf('. ');
     if (lastDot > maxLength ~/ 2) return lastDot + 1;
     final lastSpace = searchRange.lastIndexOf(' ');
