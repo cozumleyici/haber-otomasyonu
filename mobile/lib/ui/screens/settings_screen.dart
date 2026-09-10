@@ -3,7 +3,7 @@ import '../../core/database/database_helper.dart';
 import '../../core/services/publisher_service.dart';
 
 class SettingsScreen extends StatefulWidget {
-  const SettingsScreen({Key? key}) : super(key: key);
+  const SettingsScreen({super.key});
 
   @override
   State<SettingsScreen> createState() => _SettingsScreenState();
@@ -211,6 +211,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     decoration: const InputDecoration(
                       labelText: 'Kanal Kullanıcı Adı veya ID',
                       hintText: '@benim_haber_kanali veya -100...',
+                      helperText: '⚠️ Bot adını değil, haberlerin gideceği KANAL adını (Örn: @haberkanalim) yazın. Botu da kanalda Yönetici yapın.',
+                      helperMaxLines: 3,
                       border: OutlineInputBorder(),
                       prefixIcon: Icon(Icons.tag),
                     ),

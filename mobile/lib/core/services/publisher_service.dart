@@ -37,7 +37,9 @@ class PublisherService {
       final data = error.response!.data;
       if (data is Map && data['description'] != null) {
         final desc = data['description'].toString();
-        if (desc.contains('chat not found')) {
+        if (desc.contains("can't send messages to the bot") || desc.contains("cannot send messages to the bot")) {
+          return 'Girdiğiniz kullanıcı adı botun kendisine aittir! Buraya botun adını değil, haberlerin paylaşılacağı Telegram KANALINIZIN adını (Örn: @haberkanalim) yazmalısınız. Botu da o kanala Yönetici (Admin) olarak eklemelisiniz.';
+        } else if (desc.contains('chat not found')) {
           return 'Kanal bulunamadı: Botu kanalınıza "Yönetici (Admin)" olarak eklediğinizden ve kanal adını başında @ olacak şekilde (Örn: @haberkanalim) girdiğinizden emin olun.';
         } else if (desc.contains('bot was blocked')) {
           return 'Bot engellenmiş: Lütfen botu kanalda yönetici yapın.';
@@ -245,10 +247,10 @@ class PublisherService {
         });
       }
 
+      final channelNote = formattedChat.isNotEmpty ? ' (Kanalınıza test mesajı gönderildi)' : '';
       return {
         'success': true,
-        'message': 'Bağlantı başarılı! Bot: @$botName' +
-            (formattedChat.isNotEmpty ? ' (Kanalınıza test mesajı gönderildi)' : ''),
+        'message': 'Bağlantı başarılı! Bot: @$botName$channelNote',
       };
     } catch (e) {
       return {'success': false, 'message': 'Telegram Hatası: ${_extractTelegramError(e)}'};
