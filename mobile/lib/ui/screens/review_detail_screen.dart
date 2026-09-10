@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
 import 'package:cached_network_image/cached_network_image.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../../models/news_draft.dart';
 import '../../bloc/review_action/review_action_bloc.dart';
 import '../../bloc/review_action/review_action_event.dart';
@@ -345,42 +346,106 @@ class _ReviewDetailScreenState extends State<ReviewDetailScreen>
     );
   }
 
+  Future<void> _openSourceUrl(String? url) async {
+    if (url == null || url.trim().isEmpty) return;
+    try {
+      final uri = Uri.parse(url.trim());
+      final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!launched && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Bağlantı tarayıcıda açılamadı.')),
+        );
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Hata oluştu: $e')),
+        );
+      }
+    }
+  }
+
   Widget _buildOriginalScrapedTab(ThemeData theme, bool isDark) {
+    final sourceUrl = widget.draft.sourceUrl;
+    final hasValidUrl = sourceUrl != null &&
+        (sourceUrl.startsWith('http://') || sourceUrl.startsWith('https://'));
+
     return ListView(
       padding: const EdgeInsets.all(16),
       children: [
+        // Kaynak URL Kartı ve Tarayıcıda Aç Butonu
         Container(
-          padding: const EdgeInsets.all(14),
+          padding: const EdgeInsets.all(16),
           decoration: BoxDecoration(
             color: isDark ? const Color(0xFF252525) : Colors.grey[100],
-            borderRadius: BorderRadius.circular(12),
+            borderRadius: BorderRadius.circular(14),
+            border: Border.all(
+              color: isDark ? Colors.grey[800]! : Colors.grey[300]!,
+            ),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              const Row(
+              Row(
                 children: [
-                  Icon(Icons.link_rounded, size: 18),
-                  SizedBox(width: 8),
-                  Text(
-                    'Orijinal Kaynak Linki:',
-                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                  Icon(Icons.link_rounded, size: 20, color: theme.colorScheme.primary),
+                  const SizedBox(width: 8),
+                  const Text(
+                    'Orijinal Kaynak Linki',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 14),
                   ),
+                  const Spacer(),
+                  if (hasValidUrl)
+                    IconButton(
+                      icon: const Icon(Icons.open_in_new_rounded, size: 20),
+                      tooltip: 'Tarayıcıda Aç',
+                      color: theme.colorScheme.primary,
+                      onPressed: () => _openSourceUrl(sourceUrl),
+                    ),
                 ],
               ),
-              const SizedBox(height: 4),
-              SelectableText(
-                widget.draft.sourceUrl ?? 'Kaynak linki bulunamadı',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: theme.colorScheme.primary,
-                  decoration: TextDecoration.underline,
+              const SizedBox(height: 6),
+              InkWell(
+                onTap: hasValidUrl ? () => _openSourceUrl(sourceUrl) : null,
+                borderRadius: BorderRadius.circular(8),
+                child: Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 4),
+                  child: Text(
+                    sourceUrl ?? 'Kaynak linki bulunamadı',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: hasValidUrl ? theme.colorScheme.primary : Colors.grey,
+                      decoration: hasValidUrl ? TextDecoration.underline : TextDecoration.none,
+                      height: 1.3,
+                    ),
+                  ),
                 ),
               ),
+              if (hasValidUrl) ...[
+                const SizedBox(height: 12),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+                      side: BorderSide(color: theme.colorScheme.primary.withValues(alpha: 0.5)),
+                    ),
+                    onPressed: () => _openSourceUrl(sourceUrl),
+                    icon: const Icon(Icons.travel_explore_rounded, size: 20),
+                    label: const Text(
+                      'Haberi Web Sitesinde İncele 🌐',
+                      style: TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                  ),
+                ),
+              ],
             ],
           ),
         ),
         const SizedBox(height: 20),
+
+        // Orijinal Başlık
         const Text(
           'Orijinal Taranan Başlık',
           style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.grey),
@@ -391,15 +456,37 @@ class _ReviewDetailScreenState extends State<ReviewDetailScreen>
           style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
         ),
         const Divider(height: 32),
-        const Text(
-          'Orijinal Taranan İçerik',
-          style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.grey),
+
+        // Orijinal Tam Metin İçeriği
+        Row(
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            const Text(
+              'Orijinal Taranan Tam Metin',
+              style: TextStyle(fontSize: 13, fontWeight: FontWeight.bold, color: Colors.grey),
+            ),
+            Text(
+              '${widget.draft.originalContent?.length ?? 0} Karakter',
+              style: TextStyle(fontSize: 12, color: Colors.grey[500]),
+            ),
+          ],
         ),
-        const SizedBox(height: 8),
-        SelectableText(
-          widget.draft.originalContent ?? 'İçerik yok',
-          style: const TextStyle(fontSize: 15, height: 1.5),
+        const SizedBox(height: 10),
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF1E1E1E) : Colors.white,
+            borderRadius: BorderRadius.circular(12),
+            border: Border.all(
+              color: isDark ? Colors.grey[850]! : Colors.grey[200]!,
+            ),
+          ),
+          child: SelectableText(
+            widget.draft.originalContent ?? 'İçerik bulunamadı',
+            style: const TextStyle(fontSize: 15, height: 1.6),
+          ),
         ),
+        const SizedBox(height: 24),
       ],
     );
   }

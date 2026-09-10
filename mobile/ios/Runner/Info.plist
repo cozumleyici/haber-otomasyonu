@@ -45,6 +45,11 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>LSApplicationQueriesSchemes</key>
+	<array>
+		<string>https</string>
+		<string>http</string>
+	</array>
 
 	<!-- Cleartext HTTP support for direct VPS IP communication without SSL -->
 	<key>NSAppTransportSecurity</key>

@@ -118,7 +118,7 @@ class UniversalWebScraperService {
         if (cardSelector != null && cardSelector.isNotEmpty) {
           final learnedArticles = _extractUsingLearnedRule(document, cleanUrl, cardSelector);
           if (learnedArticles.length >= 2) {
-            return await _enrichArticlesWithHighResImages(learnedArticles, cleanUrl);
+            return await _enrichArticlesWithFullContentAndImages(learnedArticles, cleanUrl);
           }
         }
       }
@@ -126,13 +126,13 @@ class UniversalWebScraperService {
       // Adım 2: Evrensel Semantik DOM Yoğunluk Analizi (Next.js, React, HTML5 uyumlu)
       var articles = _extractArticlesFromListingPage(document, cleanUrl);
       if (articles.length >= 2) {
-        return await _enrichArticlesWithHighResImages(articles, cleanUrl);
+        return await _enrichArticlesWithFullContentAndImages(articles, cleanUrl);
       }
 
       // Adım 3: JSON-LD & Schema.org Yapılandırılmış Veri Analizi
       articles = _extractFromJsonLd(document, cleanUrl);
       if (articles.length >= 2) {
-        return await _enrichArticlesWithHighResImages(articles, cleanUrl);
+        return await _enrichArticlesWithFullContentAndImages(articles, cleanUrl);
       }
 
       // Adım 4: OTONOM YAPAY ZEKA KEŞFİ VE KURAL ÖĞRENME (AI Self-Learning)
@@ -187,7 +187,7 @@ class UniversalWebScraperService {
         }
 
         if (aiExtracted.isNotEmpty) {
-          return await _enrichArticlesWithHighResImages(aiExtracted, cleanUrl);
+          return await _enrichArticlesWithFullContentAndImages(aiExtracted, cleanUrl);
         }
       }
 
@@ -383,13 +383,16 @@ class UniversalWebScraperService {
     return sb.toString();
   }
 
-  /// Görseli eksik haberler için haberin kendi detay sayfasından yüksek çözünürlüklü og:image'ı tamamlar
-  Future<List<ScrapedArticle>> _enrichArticlesWithHighResImages(
+  /// Her haberin detay sayfasına giderek hem TAM orijinal metni (tüm paragrafları)
+  /// hem de yüksek çözünürlüklü kapak görselini (og:image) eksiksiz çeker
+  Future<List<ScrapedArticle>> _enrichArticlesWithFullContentAndImages(
       List<ScrapedArticle> articles, String baseUrl) async {
     final List<ScrapedArticle> enriched = [];
 
     for (var art in articles) {
-      if (art.imageUrl != null && art.imageUrl!.isNotEmpty) {
+      // Eğer tekil bir haber sayfası zaten tam metinle geldiyse (uzunluk > 350 karakter)
+      // ve görseli varsa tekrar detay sayfasına gitmeye gerek yok
+      if (art.content.length > 350 && art.imageUrl != null && art.imageUrl!.isNotEmpty) {
         enriched.add(art);
         continue;
       }
@@ -398,27 +401,81 @@ class UniversalWebScraperService {
         final detailRes = await _dio.get(
           art.link,
           options: Options(
-            sendTimeout: const Duration(seconds: 5),
-            receiveTimeout: const Duration(seconds: 5),
+            sendTimeout: const Duration(seconds: 8),
+            receiveTimeout: const Duration(seconds: 8),
           ),
         );
+
         if (detailRes.statusCode == 200 && detailRes.data != null) {
           final detailDoc = html_parser.parse(detailRes.data.toString());
+
+          // 1. Kapak görseli zenginleştirme (og:image en yüksek çözünürlüktür)
           final ogImage = detailDoc
               .querySelector('meta[property="og:image"], meta[name="twitter:image"]')
               ?.attributes['content'];
+          final resolvedImage = _resolveImageUrl(ogImage, art.link) ?? art.imageUrl;
+
+          // 2. Tam Orijinal Metin Zenginleştirme
+          // Script, style, header, footer, nav etiketlerini temizle
+          for (var el in detailDoc.querySelectorAll('script, style, noscript, header, footer, nav, aside, .ad, .ads, .sidebar')) {
+            el.remove();
+          }
+
+          // Öncelikli makale gövdesi seçicileri
+          final contentContainer = detailDoc.querySelector(
+              'article, [itemprop="articleBody"], [class*="article-content"], [class*="article-body"], [class*="news-content"], [class*="news-detail"], [class*="haber-metni"], [class*="haber-icerik"], [class*="detay-icerik"], [class*="entry-content"], [class*="post-content"], [class*="prose"], main');
+
+          final searchRoot = contentContainer ?? detailDoc.body;
+          String fullContent = art.content;
+
+          if (searchRoot != null) {
+            final pElements = searchRoot.querySelectorAll('p');
+            final validParagraphs = <String>[];
+
+            for (var p in pElements) {
+              final text = p.text
+                  .replaceAll(RegExp(r'<[^>]*>|&[^;]+;'), ' ')
+                  .replaceAll(RegExp(r'\s+'), ' ')
+                  .trim();
+
+              // Çok kısa veya reklam/künye etiketlerini filtrele
+              if (text.length >= 25 &&
+                  !text.startsWith('Fotoğraf:') &&
+                  !text.startsWith('Kaynak:') &&
+                  !text.contains('Tüm hakları saklıdır')) {
+                validParagraphs.add(text);
+              }
+            }
+
+            if (validParagraphs.isNotEmpty) {
+              fullContent = validParagraphs.join('\n\n');
+            }
+          }
+
+          // Eğer p etiketleri bulunamadıysa ama og:description daha uzunsa onu kullan
+          if (fullContent.length <= art.content.length) {
+            final ogDesc = detailDoc
+                .querySelector('meta[property="og:description"], meta[name="twitter:description"]')
+                ?.attributes['content']
+                ?.trim();
+            if (ogDesc != null && ogDesc.length > fullContent.length) {
+              fullContent = ogDesc;
+            }
+          }
 
           enriched.add(
             ScrapedArticle(
               title: art.title,
               link: art.link,
-              content: art.content,
-              imageUrl: _resolveImageUrl(ogImage, art.link),
+              content: fullContent,
+              imageUrl: resolvedImage,
             ),
           );
           continue;
         }
-      } catch (_) {}
+      } catch (e) {
+        print('[UniversalWebScraper] Detay sayfası zenginleştirme hatası (${art.link}): $e');
+      }
 
       enriched.add(art);
     }
