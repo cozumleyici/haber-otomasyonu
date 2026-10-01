@@ -1,5 +1,7 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter_bloc/flutter_bloc.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'core/theme/app_theme.dart';
 import 'repositories/news_repository.dart';
 import 'bloc/pending_news/pending_news_bloc.dart';
@@ -9,6 +11,12 @@ import 'ui/screens/pending_news_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Windows ve Linux masaüstü ortamında SQLite FFI motorunu başlat
+  if (Platform.isWindows || Platform.isLinux) {
+    sqfliteFfiInit();
+    databaseFactory = databaseFactoryFfi;
+  }
 
   final newsRepository = NewsRepository();
 

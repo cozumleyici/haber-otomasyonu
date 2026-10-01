@@ -132,6 +132,18 @@ class DatabaseHelper {
       'value': 'true',
     });
     await db.insert('app_settings', {
+      'key': 'facebook_page_id',
+      'value': '',
+    });
+    await db.insert('app_settings', {
+      'key': 'facebook_page_token',
+      'value': '',
+    });
+    await db.insert('app_settings', {
+      'key': 'facebook_enabled',
+      'value': 'true',
+    });
+    await db.insert('app_settings', {
       'key': 'wordpress_base_url',
       'value': '',
     });

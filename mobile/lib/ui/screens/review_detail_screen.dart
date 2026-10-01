@@ -47,6 +47,9 @@ class _ReviewDetailScreenState extends State<ReviewDetailScreen>
     );
   }
 
+  bool _publishToTelegram = true;
+  bool _publishToFacebook = true;
+
   @override
   void dispose() {
     _tabController.dispose();
@@ -68,7 +71,7 @@ class _ReviewDetailScreenState extends State<ReviewDetailScreen>
           ],
         ),
         content: const Text(
-          'Bu haberi reddetmek istediğinize emin misiniz? Kanala gönderilmeyecektir.',
+          'Bu haberi reddetmek istediğinize emin misiniz? Hiçbir platformda yayınlanmayacaktır.',
         ),
         actions: [
           TextButton(
@@ -92,6 +95,17 @@ class _ReviewDetailScreenState extends State<ReviewDetailScreen>
   }
 
   void _submitDecision(String action) {
+    final selectedPlatforms = <String>[];
+    if (_publishToTelegram) selectedPlatforms.add('telegram');
+    if (_publishToFacebook) selectedPlatforms.add('facebook');
+
+    if (action == 'approve' && selectedPlatforms.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Lütfen en az bir yayın platformu (Telegram veya Facebook) seçin.')),
+      );
+      return;
+    }
+
     context.read<ReviewActionBloc>().add(
           SubmitReviewDecision(
             draftId: widget.draft.id,
@@ -105,7 +119,7 @@ class _ReviewDetailScreenState extends State<ReviewDetailScreen>
             imageUrl: _imageUrlController.text.trim().isNotEmpty
                 ? _imageUrlController.text.trim()
                 : null,
-            targetPlatforms: const ['telegram'],
+            targetPlatforms: selectedPlatforms,
           ),
         );
   }
@@ -196,7 +210,7 @@ class _ReviewDetailScreenState extends State<ReviewDetailScreen>
                               const SizedBox(height: 16),
                               Text(
                                 state.action == 'approve'
-                                    ? 'Telegram Kanalına Yayınlanıyor...'
+                                    ? 'Seçili Platformlara Yayınlanıyor...'
                                     : 'Taslak Reddediliyor...',
                                 style: const TextStyle(fontWeight: FontWeight.w600),
                               ),
@@ -284,23 +298,60 @@ class _ReviewDetailScreenState extends State<ReviewDetailScreen>
         ),
         const SizedBox(height: 16),
 
-        // Hedef Platform Bilgi Rozeti (Sadece Telegram)
+        // Hedef Platform Seçimi (Telegram & Facebook)
         Container(
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           decoration: BoxDecoration(
-            color: const Color(0xFF229ED9).withValues(alpha: 0.1),
+            color: isDark ? Colors.grey[850] : Colors.grey[100],
             borderRadius: BorderRadius.circular(12),
-            border: Border.all(color: const Color(0xFF229ED9).withValues(alpha: 0.3)),
+            border: Border.all(color: isDark ? Colors.grey[700]! : Colors.grey[300]!),
           ),
-          child: const Row(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Icon(Icons.telegram, color: Color(0xFF229ED9), size: 24),
-              SizedBox(width: 10),
-              Expanded(
-                child: Text(
-                  'Yayın Hedefi: Telegram Kanalı',
-                  style: TextStyle(fontWeight: FontWeight.w600, color: Color(0xFF229ED9)),
-                ),
+              const Row(
+                children: [
+                  Icon(Icons.share_rounded, size: 20),
+                  SizedBox(width: 8),
+                  Text(
+                    'Yayınlanacak Platformlar:',
+                    style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 10),
+              Row(
+                children: [
+                  Expanded(
+                    child: FilterChip(
+                      selected: _publishToTelegram,
+                      avatar: const Icon(Icons.telegram, color: Color(0xFF229ED9), size: 18),
+                      label: const Text('Telegram', style: TextStyle(fontSize: 13)),
+                      selectedColor: const Color(0xFF229ED9).withValues(alpha: 0.2),
+                      checkmarkColor: const Color(0xFF229ED9),
+                      onSelected: (val) {
+                        setState(() {
+                          _publishToTelegram = val;
+                        });
+                      },
+                    ),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: FilterChip(
+                      selected: _publishToFacebook,
+                      avatar: const Icon(Icons.facebook, color: Color(0xFF1877F2), size: 18),
+                      label: const Text('Facebook', style: TextStyle(fontSize: 13)),
+                      selectedColor: const Color(0xFF1877F2).withValues(alpha: 0.2),
+                      checkmarkColor: const Color(0xFF1877F2),
+                      onSelected: (val) {
+                        setState(() {
+                          _publishToFacebook = val;
+                        });
+                      },
+                    ),
+                  ),
+                ],
               ),
             ],
           ),
@@ -331,9 +382,9 @@ class _ReviewDetailScreenState extends State<ReviewDetailScreen>
               child: ElevatedButton.icon(
                 onPressed: isSubmitting ? null : () => _submitDecision('approve'),
                 icon: const Icon(Icons.send_rounded),
-                label: const Text('Onayla & Telegram\'a At'),
+                label: const Text('Onayla & Yayınla'),
                 style: ElevatedButton.styleFrom(
-                  backgroundColor: const Color(0xFF229ED9),
+                  backgroundColor: const Color(0xFF1976D2),
                   foregroundColor: Colors.white,
                   padding: const EdgeInsets.symmetric(vertical: 14),
                 ),

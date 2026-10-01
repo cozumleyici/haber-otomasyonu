@@ -52,7 +52,29 @@ class PublisherService {
     return error.toString();
   }
 
-  /// Onaylanan haberi doğrudan Telegram Kanalına yayınlar
+  String _extractFacebookError(dynamic error) {
+    if (error is DioException && error.response?.data != null) {
+      final data = error.response!.data;
+      if (data is Map && data['error'] != null) {
+        final err = data['error'];
+        if (err is Map) {
+          final msg = err['message']?.toString() ?? '';
+          final code = err['code'];
+          if (code == 190) {
+            return 'Facebook Erişim Jetonu (Access Token) süresi dolmuş veya geçersiz. Lütfen yenileyin.';
+          } else if (code == 200 || code == 10) {
+            return 'Facebook Sayfa Yetkisi Yetersiz: Jetonun "pages_manage_posts" ve "pages_read_engagement" izinlerine sahip olduğundan emin olun.';
+          } else if (code == 100) {
+            return 'Geçersiz parametre veya Sayfa ID: $msg';
+          }
+          return msg.isNotEmpty ? msg : 'Facebook API Hatası (Kod: $code)';
+        }
+      }
+    }
+    return error.toString();
+  }
+
+  /// Onaylanan haberi seçilen tüm hedef platformlara (Telegram, Facebook) yayınlar
   Future<PublishResult> publishNews({
     required String finalTitle,
     required String finalContent,
@@ -60,24 +82,99 @@ class PublisherService {
     List<String>? targetPlatforms,
   }) async {
     final settings = await DatabaseHelper.instance.getAllSettings();
-    final botToken = (settings['telegram_bot_token'] ?? '').trim();
-    final rawChatId = (settings['telegram_chat_id'] ?? '').trim();
+    final platforms = targetPlatforms ?? ['telegram', 'facebook'];
 
-    if (botToken.isEmpty || rawChatId.isEmpty) {
+    final shouldPublishTelegram = platforms.contains('telegram');
+    final shouldPublishFacebook = platforms.contains('facebook');
+
+    if (!shouldPublishTelegram && !shouldPublishFacebook) {
       return PublishResult(
         success: false,
-        message: 'Lütfen ayarlardan Telegram Bot Token ve Kanal ID bilgilerini kaydedin.',
+        message: 'Yayınlanacak en az bir platform (Telegram veya Facebook) seçilmelidir.',
       );
     }
 
-    final chatId = _formatChatId(rawChatId);
+    final successTargets = <String>[];
+    final failureMessages = <String>[];
 
+    // 1. Telegram Yayını
+    if (shouldPublishTelegram) {
+      final botToken = (settings['telegram_bot_token'] ?? '').trim();
+      final rawChatId = (settings['telegram_chat_id'] ?? '').trim();
+
+      if (botToken.isEmpty || rawChatId.isEmpty) {
+        failureMessages.add('Telegram: Ayarlarda Bot Token veya Kanal ID girilmemiş.');
+      } else {
+        final tResult = await publishToTelegram(
+          botToken: botToken,
+          chatId: _formatChatId(rawChatId),
+          finalTitle: finalTitle,
+          finalContent: finalContent,
+          imageUrl: imageUrl,
+        );
+        if (tResult.success) {
+          successTargets.add('Telegram Kanalı');
+        } else {
+          failureMessages.add('Telegram: ${tResult.message}');
+        }
+      }
+    }
+
+    // 2. Facebook Sayfa Yayını
+    if (shouldPublishFacebook) {
+      final fbPageId = (settings['facebook_page_id'] ?? '').trim();
+      final fbToken = (settings['facebook_page_token'] ?? '').trim();
+
+      if (fbPageId.isEmpty || fbToken.isEmpty) {
+        failureMessages.add('Facebook: Ayarlarda Sayfa ID veya Erişim Jetonu girilmemiş.');
+      } else {
+        final fbResult = await publishToFacebook(
+          pageId: fbPageId,
+          pageAccessToken: fbToken,
+          finalTitle: finalTitle,
+          finalContent: finalContent,
+          imageUrl: imageUrl,
+        );
+        if (fbResult.success) {
+          successTargets.add('Facebook Sayfası');
+        } else {
+          failureMessages.add('Facebook: ${fbResult.message}');
+        }
+      }
+    }
+
+    if (successTargets.isNotEmpty && failureMessages.isEmpty) {
+      return PublishResult(
+        success: true,
+        message: 'Haber başarıyla yayınlandı: ${successTargets.join(' & ')}',
+      );
+    } else if (successTargets.isNotEmpty && failureMessages.isNotEmpty) {
+      return PublishResult(
+        success: true,
+        message: '${successTargets.join(' & ')} yayınlandı. Uyarılar: ${failureMessages.join(', ')}',
+      );
+    } else {
+      return PublishResult(
+        success: false,
+        message: failureMessages.join(' | '),
+      );
+    }
+  }
+
+  /// Telegram Kanalına Yayınlama
+  Future<PublishResult> publishToTelegram({
+    required String botToken,
+    required String chatId,
+    required String finalTitle,
+    required String finalContent,
+    String? imageUrl,
+  }) async {
     try {
       final safeTitle = _escapeHtml(finalTitle.trim());
       final safeContent = _escapeHtml(finalContent.trim());
       final fullHtmlText = '<b>$safeTitle</b>\n\n$safeContent';
 
-      // 1. Durum: Görsel var ise
+      // 1. Görsel var ise
       if (imageUrl != null && imageUrl.trim().isNotEmpty) {
         final cleanImageUrl = imageUrl.trim();
 
@@ -93,7 +190,7 @@ class PublisherService {
             return PublishResult(success: true, message: 'Haber Telegram kanalınıza başarıyla yayınlandı!');
           }
         } else {
-          // Metin 1000 karakterden uzun ise: Fotoğrafı başlık + ilk kısım ile gönder, kalanını mesaj olarak gönder
+          // Metin 1000 karakterden uzun ise: Fotoğrafı başlık + ilk kısım ile gönder, kalanını takip eden mesaj olarak gönder
           final titlePrefix = '<b>$safeTitle</b>\n\n';
           final availableForContent = 980 - titlePrefix.length;
 
@@ -132,7 +229,7 @@ class PublisherService {
         }
       }
 
-      // 2. Durum: Görsel yoksa veya fotoğraf gönderimi başarısız olduysa doğrudan sendMessage ile gönder
+      // 2. Görsel yoksa veya fotoğraf gönderimi başarısız olduysa doğrudan sendMessage ile parçalı gönder
       final messageSuccess = await _trySendMessage(
         botToken: botToken,
         chatId: chatId,
@@ -149,6 +246,120 @@ class PublisherService {
     }
   }
 
+  /// Facebook Sayfasına Yayınlama (Graph API v19.0)
+  Future<PublishResult> publishToFacebook({
+    required String pageId,
+    required String pageAccessToken,
+    required String finalTitle,
+    required String finalContent,
+    String? imageUrl,
+  }) async {
+    final cleanId = pageId.trim();
+    final cleanToken = pageAccessToken.trim();
+
+    if (cleanId.isEmpty || cleanToken.isEmpty) {
+      return PublishResult(
+        success: false,
+        message: 'Facebook Sayfa ID veya Erişim Jetonu eksik.',
+      );
+    }
+
+    try {
+      final messageText = '$finalTitle\n\n$finalContent';
+
+      // 1. Görsel var ise öncelikle /photos uç noktasına gönder
+      if (imageUrl != null && imageUrl.trim().isNotEmpty) {
+        final cleanImageUrl = imageUrl.trim();
+
+        // 1a. Cihaz üzerinden görseli indirip Multipart FormData olarak yükle
+        try {
+          final imgRes = await _dio.get<List<int>>(
+            cleanImageUrl,
+            options: Options(
+              responseType: ResponseType.bytes,
+              sendTimeout: const Duration(seconds: 15),
+              receiveTimeout: const Duration(seconds: 15),
+              headers: {
+                'User-Agent':
+                    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+                'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+              },
+            ),
+          );
+
+          if (imgRes.statusCode == 200 && imgRes.data != null && imgRes.data!.isNotEmpty) {
+            final formData = FormData.fromMap({
+              'caption': messageText,
+              'access_token': cleanToken,
+              'source': MultipartFile.fromBytes(
+                imgRes.data!,
+                filename: 'news_image.jpg',
+              ),
+            });
+
+            final photoRes = await _dio.post(
+              'https://graph.facebook.com/v19.0/$cleanId/photos',
+              data: formData,
+            );
+
+            if (photoRes.statusCode == 200 && photoRes.data['id'] != null) {
+              return PublishResult(
+                success: true,
+                message: 'Facebook Sayfanızda fotoğraflı olarak başarıyla yayınlandı!',
+              );
+            }
+          }
+        } catch (e) {
+          print('[PublisherService] Facebook multipart upload failed, trying direct URL: $e');
+        }
+
+        // 1b. Doğrudan resim URL'si ile /photos uç noktasına yükle
+        try {
+          final photoRes = await _dio.post(
+            'https://graph.facebook.com/v19.0/$cleanId/photos',
+            data: {
+              'caption': messageText,
+              'url': cleanImageUrl,
+              'access_token': cleanToken,
+            },
+          );
+
+          if (photoRes.statusCode == 200 && photoRes.data['id'] != null) {
+            return PublishResult(
+              success: true,
+              message: 'Facebook Sayfanızda başarıyla yayınlandı!',
+            );
+          }
+        } catch (e) {
+          print('[PublisherService] Facebook photo url upload failed, falling back to feed: $e');
+        }
+      }
+
+      // 2. Görsel yoksa veya fotoğraf yükleme başarısız olursa /feed uç noktasına metin olarak gönder
+      final feedRes = await _dio.post(
+        'https://graph.facebook.com/v19.0/$cleanId/feed',
+        data: {
+          'message': messageText,
+          'access_token': cleanToken,
+        },
+      );
+
+      if (feedRes.statusCode == 200 && feedRes.data['id'] != null) {
+        return PublishResult(
+          success: true,
+          message: 'Facebook Sayfanızda başarıyla yayınlandı!',
+        );
+      }
+
+      return PublishResult(success: false, message: 'Facebook paylaşımı tamamlanamadı.');
+    } catch (e) {
+      return PublishResult(
+        success: false,
+        message: 'Facebook Hatası: ${_extractFacebookError(e)}',
+      );
+    }
+  }
+
   Future<bool> _trySendPhoto({
     required String botToken,
     required String chatId,
@@ -158,7 +369,6 @@ class PublisherService {
     final url = 'https://api.telegram.org/bot$botToken/sendPhoto';
 
     // 1. Önce görseli cihazda indirip Multipart FormData olarak Telegram'a yüklemeyi dene
-    // (Böylece web sitesinin Telegram sunucularını engellemesi problemi aşılır)
     try {
       final imgResponse = await _dio.get<List<int>>(
         photoUrl,
@@ -209,7 +419,6 @@ class PublisherService {
       final desc = e.response?.data is Map ? e.response?.data['description']?.toString() : null;
       print('[PublisherService] direct sendPhoto failed: $desc');
 
-      // Parse hatası verdiyse HTML etiketlerini temizleyip düz metin olarak tekrar dene
       if (desc != null && (desc.contains("can't parse") || desc.contains("entity"))) {
         try {
           final retryRes = await _dio.post(url, data: {
@@ -221,7 +430,6 @@ class PublisherService {
         } catch (_) {}
       }
 
-      // Kanal bulunamadı veya yetki hatasıysa hatayı fırlat
       if (desc != null &&
           (desc.contains('chat not found') ||
               desc.contains('Unauthorized') ||
@@ -277,7 +485,6 @@ class PublisherService {
       final desc = e.response?.data is Map ? e.response?.data['description']?.toString() : null;
       print('[PublisherService] sendMessage chunk failed: $desc');
 
-      // Parse hatası verdiyse düz metin dene
       if (desc != null && (desc.contains("can't parse") || desc.contains("entity"))) {
         try {
           final retryRes = await _dio.post(url, data: {
@@ -355,6 +562,38 @@ class PublisherService {
       };
     } catch (e) {
       return {'success': false, 'message': 'Telegram Hatası: ${_extractTelegramError(e)}'};
+    }
+  }
+
+  /// Facebook Sayfa bağlantısını ve erişim yetkisini test eder
+  Future<Map<String, dynamic>> testFacebook(String pageId, String pageAccessToken) async {
+    try {
+      final cleanId = pageId.trim();
+      final cleanToken = pageAccessToken.trim();
+
+      if (cleanId.isEmpty || cleanToken.isEmpty) {
+        return {'success': false, 'message': 'Facebook Sayfa ID ve Erişim Jetonu boş olamaz.'};
+      }
+
+      final res = await _dio.get(
+        'https://graph.facebook.com/v19.0/$cleanId',
+        queryParameters: {
+          'fields': 'id,name,link',
+          'access_token': cleanToken,
+        },
+      );
+
+      if (res.statusCode == 200 && res.data['name'] != null) {
+        final pageName = res.data['name'];
+        return {
+          'success': true,
+          'message': 'Facebook bağlantısı başarılı! Sayfa: "$pageName"',
+        };
+      }
+
+      return {'success': false, 'message': 'Facebook sayfasına erişilemedi.'};
+    } catch (e) {
+      return {'success': false, 'message': 'Facebook Hatası: ${_extractFacebookError(e)}'};
     }
   }
 }

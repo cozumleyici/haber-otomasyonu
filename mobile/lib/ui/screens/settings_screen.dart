@@ -16,6 +16,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
   final _aiPromptController = TextEditingController();
   final _telegramTokenController = TextEditingController();
   final _telegramChatIdController = TextEditingController();
+  final _facebookPageIdController = TextEditingController();
+  final _facebookTokenController = TextEditingController();
 
   String _geminiModel = 'gemini-1.5-flash';
   int _learnedEditsCount = 0;
@@ -37,6 +39,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
       _aiPromptController.text = settings['ai_custom_instructions'] ?? '';
       _telegramTokenController.text = settings['telegram_bot_token'] ?? '';
       _telegramChatIdController.text = settings['telegram_chat_id'] ?? '';
+      _facebookPageIdController.text = settings['facebook_page_id'] ?? '';
+      _facebookTokenController.text = settings['facebook_page_token'] ?? '';
       _learnedEditsCount = count;
       _isLoading = false;
     });
@@ -49,12 +53,40 @@ class _SettingsScreenState extends State<SettingsScreen> {
     await db.setSetting('ai_custom_instructions', _aiPromptController.text.trim());
     await db.setSetting('telegram_bot_token', _telegramTokenController.text.trim());
     await db.setSetting('telegram_chat_id', _telegramChatIdController.text.trim());
+    await db.setSetting('facebook_page_id', _facebookPageIdController.text.trim());
+    await db.setSetting('facebook_page_token', _facebookTokenController.text.trim());
 
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Ayarlar başarıyla kaydedildi!'),
           backgroundColor: Colors.green,
+        ),
+      );
+    }
+  }
+
+  Future<void> _testFacebook() async {
+    final pageId = _facebookPageIdController.text.trim();
+    final token = _facebookTokenController.text.trim();
+
+    if (pageId.isEmpty || token.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Lütfen Facebook Sayfa ID ve Erişim Jetonunu girin.')),
+      );
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Facebook bağlantısı test ediliyor...')),
+    );
+
+    final res = await _publisherService.testFacebook(pageId, token);
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(res['message']),
+          backgroundColor: res['success'] ? Colors.green : Colors.red,
         ),
       );
     }
@@ -222,6 +254,62 @@ class _SettingsScreenState extends State<SettingsScreen> {
                     onPressed: _testTelegram,
                     icon: const Icon(Icons.send_rounded),
                     label: const Text('Telegram Bağlantısını Test Et & Mesaj At'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          const SizedBox(height: 16),
+
+          // 3. FACEBOOK SAYFA KARTI
+          Card(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Row(
+                    children: [
+                      Icon(Icons.facebook, color: Color(0xFF1877F2), size: 28),
+                      SizedBox(width: 10),
+                      Text(
+                        'Facebook Sayfa Yayını',
+                        style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const Divider(height: 24),
+                  TextField(
+                    controller: _facebookPageIdController,
+                    decoration: const InputDecoration(
+                      labelText: 'Facebook Sayfa ID',
+                      hintText: '1092837465...',
+                      helperText: 'Facebook Sayfanızın Hakkında bölümünden veya URL\'sinden alabilirsiniz',
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.badge_outlined),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  TextField(
+                    controller: _facebookTokenController,
+                    decoration: const InputDecoration(
+                      labelText: 'Sayfa Erişim Jetonu (Page Access Token)',
+                      hintText: 'EAABw...',
+                      helperText: 'Graph API Explorer veya Meta for Developers üzerinden oluşturulan kalıcı Sayfa Jetonu',
+                      helperMaxLines: 2,
+                      border: OutlineInputBorder(),
+                      prefixIcon: Icon(Icons.vpn_key_outlined),
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  OutlinedButton.icon(
+                    onPressed: _testFacebook,
+                    icon: const Icon(Icons.send_rounded, color: Color(0xFF1877F2)),
+                    label: const Text(
+                      'Facebook Bağlantısını Test Et',
+                      style: TextStyle(color: Color(0xFF1877F2)),
+                    ),
                   ),
                 ],
               ),
